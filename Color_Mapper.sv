@@ -1,0 +1,381 @@
+//**************//
+//FINAL PROJECT NOTES//
+//give color_mapper array indicating board state
+//begin drawing board on Draw_X = 80, Draw_Y = 0.  stop on Draw_X = 560, Draw_Y = 480
+//(board length = 60 px/square * 8 squares = 480px --> 160 pixels left over --> 80 on each side to center board)
+//board length = VGA length so nothing to do here.
+
+
+`include "constants.sv"
+import CONSTANTS::*;
+
+// color_mapper: Decide which color to be output to VGA for each pixel.
+module  color_mapper ( input        [9:0] DrawX, DrawY,       // Current pixel coordinates
+                       input logic [9:0] cursor_location_x, cursor_location_y,
+                       input logic [2:0] startX, startY,
+                       output logic [7:0] VGA_R, VGA_G, VGA_B, // VGA RGB output
+                       output logic [2:0] cursor_squareX, cursor_squareY,
+                       input logic Clk,
+                       input logic [7:0][7:0][3:0] board,
+                       input logic highlight_flag,
+                       input logic [3:0][4:0] timer_status_black, timer_status_white
+                     );
+
+    logic [7:0] Red, Green, Blue;
+
+    //address of region to be read out from ROM
+    logic [16:0] read_address;
+    logic [15:0] read_address_mouse;
+    //output 24-bit color from ROM
+    logic [23:0] color, color_mouse;
+    logic [23:0] DARK_SQUARE = 24'hA86725;
+    logic [23:0] LIGHT_SQUARE = 24'hFCEAD7;
+    logic [23:0] background;
+    logic [9:0] mouse_point_x, mouse_point_y;
+    //x-y location of square on board
+    shortint SQUARE_X;
+    shortint SQUARE_Y;
+
+    //offset within square (for fetching from memory)
+    logic [11:0] pixel_offset, mouse_offset;
+
+    //initialize rom block to hold sprites for pieces
+    rom_pieces rom(.*, .data_Out(color));
+    rom_mouse rom_m(.*, .read_address(read_address_mouse), .data_Out(color_mouse));
+
+    // Output colors to VGA
+    assign VGA_R = Red;
+    assign VGA_G = Green;
+    assign VGA_B = Blue;
+
+    // Assign colors
+  always_comb
+    begin
+      //assign default values
+      mouse_point_x = cursor_location_x - 55;
+      mouse_point_y = cursor_location_y - 59;
+      Red = 0;
+      Green = 0;
+      Blue = 0;
+      read_address = 0;
+      read_address_mouse = 0;
+      SQUARE_X = 0;
+      SQUARE_Y = 0;
+      pixel_offset = 0;
+      mouse_offset = 0;
+      background = 0;
+
+      SQUARE_X = (DrawX-80)/SQUARE_DIM;
+      SQUARE_Y = DrawY/SQUARE_DIM;
+      cursor_squareX = (cursor_location_x - 80 - 55)/SQUARE_DIM;
+      cursor_squareY = (cursor_location_y - 58)/SQUARE_DIM;
+      //only draw for region designated for board, otherwise draw nothing (black)
+    if (DrawX >= 80 && DrawY <= 480 && DrawX < 560)
+      begin
+
+      //
+      // compute offset into square
+      pixel_offset = DrawX-80 - (SQUARE_X*SQUARE_DIM) + (DrawY - (SQUARE_Y*SQUARE_DIM))*SQUARE_DIM;
+      mouse_offset = (DrawX - (cursor_location_x - SQUARE_DIM)) + SQUARE_DIM*(DrawY - (cursor_location_y - SQUARE_DIM));
+
+      read_address_mouse = mouse_offset;
+
+      //if square x,y locations are both even or both odd, we are on a light-square.
+      //else we are on a dark-square
+      if (SQUARE_X == startX && SQUARE_Y == startY && highlight_flag)
+        background = 24'h9278F9;
+      else if ((SQUARE_X & 1'b1) == (SQUARE_Y & 1'b1))
+        background = LIGHT_SQUARE;
+      else
+        background = DARK_SQUARE;
+
+      //read out from ROM at the block for the piece we are on and
+      //at the correct offset within that block
+      unique case (board[SQUARE_X][SQUARE_Y])
+        default:
+          read_address = QUEEN_WHITE_ROM + pixel_offset;
+        PAWN_BLACK:
+          read_address = PAWN_BLACK_ROM + pixel_offset;
+        PAWN_WHITE:
+          read_address = PAWN_WHITE_ROM + pixel_offset;
+        KNIGHT_BLACK:
+          read_address = KNIGHT_BLACK_ROM + pixel_offset;
+        KNIGHT_WHITE:
+          read_address = KNIGHT_WHITE_ROM + pixel_offset;
+        BISHOP_BLACK:
+          read_address = BISHOP_BLACK_ROM + pixel_offset;
+        BISHOP_WHITE:
+          read_address = BISHOP_WHITE_ROM + pixel_offset;
+        ROOK_BLACK:
+          read_address = ROOK_BLACK_ROM + pixel_offset;
+        ROOK_WHITE:
+          read_address = ROOK_WHITE_ROM + pixel_offset;
+        QUEEN_BLACK:
+          read_address = QUEEN_BLACK_ROM + pixel_offset;
+        QUEEN_WHITE:
+          read_address = QUEEN_WHITE_ROM + pixel_offset;
+        KING_BLACK:
+          read_address = KING_BLACK_ROM + pixel_offset;
+        KING_WHITE:
+          read_address = KING_WHITE_ROM + pixel_offset;
+      endcase
+
+      if ((cursor_location_x - SQUARE_DIM < DrawX) && (cursor_location_x > DrawX) &&
+          (cursor_location_y - SQUARE_DIM < DrawY) && (cursor_location_y > DrawY) &&
+          (color_mouse == 24'h000000 || color_mouse == 24'hffffff)) begin
+        //color_temp = color;
+        Red = color_mouse[23:16];
+        Green = color_mouse[15:8];
+        Blue = color_mouse[7:0];
+      end
+
+      else if (color == 24'hf17ec || board[SQUARE_X][SQUARE_Y] == EMPTY)
+      begin
+        Red = background[23:16];
+        Green = background[15:8];
+        Blue = background[7:0];
+      end
+
+      else begin
+        Red = color[23:16];
+        Green = color[15:8];
+        Blue = color[7:0];
+      end
+
+    end
+
+    //draw timer on side of board
+    else if (DrawY <= 240) begin
+      if (DrawX >= 480 && DrawX < 560) begin
+        if (DrawY < SQUARE_DIM) begin
+          unique case (timer_status_black[3])
+            default:;
+
+            4'b0000:
+            read_address = ZERO_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0001:
+            read_address = ONE_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0010:
+            read_address = TWO_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0011:
+            read_address = THREE_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0100:
+            read_address = FOUR_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0101:
+            read_address = FIVE_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0110:
+            read_address = SIX_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b0111:
+            read_address = SEVEN_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b1000:
+            read_address = EIGHT_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+            4'b1001:
+            read_address = NINE_ROM + (DrawX - 480) + DrawY*SQUARE_DIM;
+          endcase
+        end
+
+        else if (DrawY < 2*SQUARE_DIM) begin
+          unique case (timer_status_black[2])
+            default:;
+
+            4'b0000:
+            read_address = ZERO_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0001:
+            read_address = ONE_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0010:
+            read_address = TWO_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0011:
+            read_address = THREE_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0100:
+            read_address = FOUR_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0101:
+            read_address = FIVE_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0110:
+            read_address = SIX_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b0111:
+            read_address = SEVEN_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b1000:
+            read_address = EIGHT_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+            4'b1001:
+            read_address = NINE_ROM + (DrawX - 480) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+
+          endcase
+        end
+
+        else if (DrawY < 3*SQUARE_DIM) begin
+          unique case (timer_status_black[1])
+            default:;
+
+            4'b0000:
+            read_address = ZERO_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0001:
+            read_address = ONE_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0010:
+            read_address = TWO_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0011:
+            read_address = THREE_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0100:
+            read_address = FOUR_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0101:
+            read_address = FIVE_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0110:
+            read_address = SIX_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b0111:
+            read_address = SEVEN_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b1000:
+            read_address = EIGHT_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+            4'b1001:
+            read_address = NINE_ROM + (DrawX - 480) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+
+            endcase
+          end
+
+          else if (DrawY < 4*SQUARE_DIM) begin
+            unique case (timer_status_black[0])
+              default:;
+
+              4'b0000:
+              read_address = ZERO_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0001:
+              read_address = ONE_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0010:
+              read_address = TWO_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0011:
+              read_address = THREE_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0100:
+              read_address = FOUR_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0101:
+              read_address = FIVE_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0110:
+              read_address = SIX_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b0111:
+              read_address = SEVEN_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b1000:
+              read_address = EIGHT_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+              4'b1001:
+              read_address = NINE_ROM + (DrawX - 480) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+
+              endcase
+            end
+
+        else if (DrawX < 80 && DrawX >= 20)
+          if (DrawY < SQUARE_DIM) begin
+            unique case (timer_status_white[3])
+              default:;
+
+              4'b0000:
+              read_address = ZERO_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0001:
+              read_address = ONE_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0010:
+              read_address = TWO_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0011:
+              read_address = THREE_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0100:
+              read_address = FOUR_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0101:
+              read_address = FIVE_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0110:
+              read_address = SIX_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b0111:
+              read_address = SEVEN_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b1000:
+              read_address = EIGHT_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+              4'b1001:
+              read_address = NINE_ROM + (DrawX - 20) + DrawY*SQUARE_DIM;
+            endcase
+          end
+
+          else if (DrawY < 2*SQUARE_DIM) begin
+            unique case (timer_status_white[2])
+              default:;
+
+              4'b0000:
+              read_address = ZERO_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0001:
+              read_address = ONE_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0010:
+              read_address = TWO_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0011:
+              read_address = THREE_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0100:
+              read_address = FOUR_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0101:
+              read_address = FIVE_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0110:
+              read_address = SIX_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b0111:
+              read_address = SEVEN_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b1000:
+              read_address = EIGHT_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+              4'b1001:
+              read_address = NINE_ROM + (DrawX - 20) + (DrawY - SQUARE_DIM)*SQUARE_DIM;
+
+            endcase
+          end
+
+          else if (DrawY < 3*SQUARE_DIM) begin
+            unique case (timer_status_white[1])
+              default:;
+
+              4'b0000:
+              read_address = ZERO_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0001:
+              read_address = ONE_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0010:
+              read_address = TWO_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0011:
+              read_address = THREE_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0100:
+              read_address = FOUR_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0101:
+              read_address = FIVE_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0110:
+              read_address = SIX_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b0111:
+              read_address = SEVEN_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b1000:
+              read_address = EIGHT_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+              4'b1001:
+              read_address = NINE_ROM + (DrawX - 20) + (DrawY - 2*SQUARE_DIM)*SQUARE_DIM;
+
+              endcase
+            end
+
+            else if (DrawY < 4*SQUARE_DIM) begin
+              unique case (timer_status_white[0])
+                default:;
+
+                4'b0000:
+                read_address = ZERO_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0001:
+                read_address = ONE_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0010:
+                read_address = TWO_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0011:
+                read_address = THREE_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0100:
+                read_address = FOUR_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0101:
+                read_address = FIVE_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0110:
+                read_address = SIX_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b0111:
+                read_address = SEVEN_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b1000:
+                read_address = EIGHT_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+                4'b1001:
+                read_address = NINE_ROM + (DrawX - 20) + (DrawY - 3*SQUARE_DIM)*SQUARE_DIM;
+
+                endcase
+              end
+
+            end
+            Red = color[23:16];
+            Green = color[15:8];
+            Blue = color[7:0];
+          end
+end
+
+
+endmodule
